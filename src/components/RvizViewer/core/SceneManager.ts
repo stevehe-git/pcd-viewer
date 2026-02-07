@@ -166,38 +166,107 @@ export class SceneManager {
 
   /**
    * 更新点云数据
+   * 优化版本：使用批量处理和高效数据结构
+   * 对于大点云，使用更紧凑的数据格式
    */
   updatePointCloud(data: PointCloudData): void {
     if (!data || !data.points || data.points.length === 0) {
       this.pointCloudData = null
+      this.registerDrawCalls()
+      this.worldviewContext.onDirty()
       return
     }
 
-    const points: any[] = []
-    const colors: any[] = []
+    const numPoints = data.points.length
     const defaultColor = { r: 1, g: 1, b: 1, a: 1 }
-    const pointSize = data.pointSize || 3.0
+    // 根据点数量自动调整点大小
+    let pointSize = data.pointSize
+    if (!pointSize) {
+      if (numPoints > 1000000) {
+        pointSize = 0.5
+      } else if (numPoints > 500000) {
+        pointSize = 1.0
+      } else if (numPoints > 100000) {
+        pointSize = 1.5
+      } else {
+        pointSize = 2.0
+      }
+    }
+    
+    const hasColors = data.colors && data.colors.length > 0
 
-    data.points.forEach((point, index) => {
-      points.push({ x: point.x, y: point.y, z: point.z })
-      const color = data.colors?.[index] || defaultColor
-      colors.push(color)
-    })
+    // 使用批量处理，避免逐个push
+    // 对于大点云，直接使用数组而不是对象数组，减少内存占用
+    const points: any[] = new Array(numPoints)
+    let colors: any[] | undefined = undefined
 
-    this.pointCloudData = {
-      pose: {
-        position: { x: 0, y: 0, z: 0 },
-        orientation: { x: 0, y: 0, z: 0, w: 1 }
-      },
-      points,
-      colors: colors.length > 0 ? colors : undefined,
-      color: colors.length === 0 ? defaultColor : undefined,
-      scale: { x: pointSize, y: pointSize, z: pointSize }
+    if (hasColors) {
+      colors = new Array(numPoints)
     }
 
-    // 重新注册绘制调用
-    this.registerDrawCalls()
-    this.worldviewContext.onDirty()
+    // 批量处理点数据 - 使用requestIdleCallback分批处理，避免阻塞
+    const processBatch = (startIndex: number, batchSize: number) => {
+      const endIndex = Math.min(startIndex + batchSize, numPoints)
+      
+      for (let i = startIndex; i < endIndex; i++) {
+        const point = data.points[i]
+        if (!point) continue
+        // 直接使用对象字面量，避免创建临时对象
+        points[i] = { x: point.x, y: point.y, z: point.z }
+        
+        if (hasColors && colors) {
+          colors[i] = data.colors![i] || defaultColor
+        }
+      }
+      
+      return endIndex
+    }
+
+    // 对于超大点云，分批处理以避免阻塞UI
+    if (numPoints > 500000) {
+      const batchSize = 100000
+      let currentIndex = 0
+      
+      const processNextBatch = () => {
+        currentIndex = processBatch(currentIndex, batchSize)
+        if (currentIndex < numPoints) {
+          // 使用setTimeout让浏览器有机会渲染
+          setTimeout(processNextBatch, 0)
+        } else {
+          // 所有批次处理完成
+          this.pointCloudData = {
+            pose: {
+              position: { x: 0, y: 0, z: 0 },
+              orientation: { x: 0, y: 0, z: 0, w: 1 }
+            },
+            points,
+            colors: colors,
+            color: !hasColors ? defaultColor : undefined,
+            scale: { x: pointSize, y: pointSize, z: pointSize }
+          }
+          this.registerDrawCalls()
+          this.worldviewContext.onDirty()
+        }
+      }
+      
+      processNextBatch()
+    } else {
+      // 小点云直接处理
+      processBatch(0, numPoints)
+      
+      this.pointCloudData = {
+        pose: {
+          position: { x: 0, y: 0, z: 0 },
+          orientation: { x: 0, y: 0, z: 0, w: 1 }
+        },
+        points,
+        colors: colors,
+        color: !hasColors ? defaultColor : undefined,
+        scale: { x: pointSize, y: pointSize, z: pointSize }
+      }
+      this.registerDrawCalls()
+      this.worldviewContext.onDirty()
+    }
   }
 
   /**
