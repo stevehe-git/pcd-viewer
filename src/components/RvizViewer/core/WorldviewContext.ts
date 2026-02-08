@@ -71,6 +71,10 @@ export class WorldviewContext {
   // group all initialized data together so it can be checked for existence to verify initialization is complete
   initializedData: InitializedData | null = null
   contextAttributes?: { [key: string]: any }
+  // 30fps 限制相关
+  private readonly FRAME_INTERVAL = 1000 / 30 // 约 33.33ms (30fps)
+  private lastPaintTime = 0
+  private scheduledPaint: number | null = null
 
   constructor({
     dimension,
@@ -143,6 +147,11 @@ export class WorldviewContext {
       cancelAnimationFrame(this._frame)
       this._frame = null
     }
+    // 取消所有待处理的定时器
+    if (this.scheduledPaint !== null) {
+      clearTimeout(this.scheduledPaint)
+      this.scheduledPaint = null
+    }
     // 清除所有绘制调用，避免在销毁时触发渲染
     this._drawCalls.clear()
     this._compiled.clear()
@@ -157,9 +166,6 @@ export class WorldviewContext {
         console.warn('Error destroying regl context:', e)
       }
       this.initializedData = null
-    }
-    if (this._frame !== null) {
-      cancelAnimationFrame(this._frame)
     }
   }
 
@@ -231,6 +237,7 @@ export class WorldviewContext {
   _paint(): void {
     this._needsPaint = false
     const start = Date.now()
+    this.lastPaintTime = start
     this.reglCommandObjects.forEach((cmd) => (cmd.stats.count = 0))
     if (!this.initializedData) {
       return
@@ -248,20 +255,47 @@ export class WorldviewContext {
       paintCall()
     })
     this.counters.render = Date.now() - start
-    // More React state updates may have happened while we were painting, since paint happens
-    // outside the normal React render flow. If this is the case, we need to paint again.
+    
+    // 如果还有待处理的渲染请求，在下一帧继续
     if (this._needsPaint) {
-      this._frame = requestAnimationFrame(() => this.paint())
+      this._scheduleNextPaint()
     } else {
       this._frame = null
+      this.scheduledPaint = null
+    }
+  }
+
+  /**
+   * 调度下一帧渲染（30fps 限制）
+   */
+  private _scheduleNextPaint(): void {
+    if (this._frame !== null || this.scheduledPaint !== null) {
+      return
+    }
+    
+    const now = performance.now()
+    const timeSinceLastPaint = now - this.lastPaintTime
+    const delay = Math.max(0, this.FRAME_INTERVAL - timeSinceLastPaint)
+    
+    if (delay <= 0) {
+      // 如果已经过了足够的时间，立即渲染
+      this._frame = requestAnimationFrame(() => this.paint())
+    } else {
+      // 否则延迟到合适的时间再渲染
+      this.scheduledPaint = window.setTimeout(() => {
+        this.scheduledPaint = null
+        this._frame = requestAnimationFrame(() => this.paint())
+      }, delay)
     }
   }
 
   onDirty(): void {
-    if (this._frame === null) {
-      this._frame = requestAnimationFrame(() => this.paint())
-    } else {
-      this._needsPaint = true
+    // 标记需要渲染
+    this._needsPaint = true
+    
+    // 如果没有正在进行的渲染，调度下一帧
+    if (this._frame === null && this.scheduledPaint === null) {
+      this._scheduleNextPaint()
     }
   }
 

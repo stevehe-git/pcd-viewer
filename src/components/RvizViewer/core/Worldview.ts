@@ -75,14 +75,7 @@ export class Worldview {
   }
 
   /**
-   * 渲染（触发一次绘制）
-   */
-  paint(): void {
-    this.context.paint()
-  }
-
-  /**
-   * 标记需要重新渲染
+   * 标记需要重新渲染（已移除 paint() 方法，统一使用 markDirty()）
    */
   markDirty(): void {
     this.context.onDirty()

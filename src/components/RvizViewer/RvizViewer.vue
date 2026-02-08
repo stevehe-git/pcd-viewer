@@ -132,7 +132,7 @@ onMounted(async () => {
   setupEventListeners()
 
   // 初始渲染
-  worldview.value.paint()
+  worldview.value.markDirty()
 })
 
 // 设置事件监听（基于 regl-worldview 的实现）
@@ -225,7 +225,6 @@ function resetCamera(): void {
   if (!worldview.value) return
   worldview.value.setCameraState(DEFAULT_CAMERA_STATE)
   worldview.value.markDirty()
-  worldview.value.paint()
 }
 
 // 切换网格显示
@@ -233,7 +232,6 @@ function toggleGrid(): void {
   gridVisible.value = !gridVisible.value
   sceneManager.value?.setGridVisible(gridVisible.value)
   worldview.value?.markDirty()
-  worldview.value?.paint()
 }
 
 // 切换坐标轴显示
@@ -241,24 +239,19 @@ function toggleAxes(): void {
   axesVisible.value = !axesVisible.value
   sceneManager.value?.setAxesVisible(axesVisible.value)
   worldview.value?.markDirty()
-  worldview.value?.paint()
 }
 
 // 设置渲染统计监听
-let renderStartTime = 0
 function setupRenderStatsListener(): void {
   if (!worldview.value) return
   
   const context = worldview.value.getContext()
   
-  // 在 paint 开始前记录时间
-  const originalPaint = context.paint.bind(context)
-  context.paint = function() {
-    renderStartTime = performance.now()
-    originalPaint()
+  // 使用 paint 回调来监听渲染
+  context.registerPaintCallback(() => {
     // 使用 requestAnimationFrame 确保在渲染完成后获取统计信息
     requestAnimationFrame(() => {
-      const renderTime = context.counters.render || (performance.now() - renderStartTime)
+      const renderTime = context.counters.render || 0
       
       // 获取点云点数
       let pointCount = 0
@@ -272,7 +265,7 @@ function setupRenderStatsListener(): void {
         pointCount: pointCount
       })
     })
-  }
+  })
 }
 
 // 监听属性变化
@@ -291,12 +284,10 @@ watch(
       })
       
       worldview.value?.markDirty()
-      worldview.value?.paint()
     } else if (!newData && oldData) {
       // 清除点云
       sceneManager.value?.updatePointCloud({ points: [] } as any)
       worldview.value?.markDirty()
-      worldview.value?.paint()
     }
   },
   { deep: true }
@@ -311,7 +302,6 @@ watch(
         sceneManager.value?.addPath(path)
       })
       worldview.value?.markDirty()
-      worldview.value?.paint()
     }
   },
   { deep: true }
