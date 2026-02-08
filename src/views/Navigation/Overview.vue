@@ -22,6 +22,9 @@
         </el-button>
         <div v-if="pointCloudData" class="point-cloud-info">
           <span>点数: {{ pointCloudData.points.length.toLocaleString() }}</span>
+          <el-checkbox v-model="useHighPerformanceEngine" size="small" style="margin-left: 12px;">
+            高性能引擎 (千万级点云)
+          </el-checkbox>
           <el-checkbox v-model="autoDownsample" size="small" style="margin-left: 12px;">
             自动下采样
           </el-checkbox>
@@ -33,7 +36,15 @@
     </div>
     <div class="content">
       <div class="viewer-wrapper">
+        <!-- 高性能渲染引擎（支持千万级点云） -->
+        <PointCloudViewer
+          v-if="useHighPerformanceEngine && currentFile"
+          :point-cloud-file="currentFile"
+          :auto-load="true"
+        />
+        <!-- 传统渲染引擎（兼容旧代码） -->
         <RvizViewer
+          v-else
           :width="viewerWidth"
           :height="viewerHeight"
           :point-cloud="pointCloudData"
@@ -129,6 +140,7 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { Upload, Delete, Close, DataAnalysis } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import RvizViewer from '../../components/RvizViewer/RvizViewer.vue'
+import PointCloudViewer from '../../components/PointCloudEngine/PointCloudViewer.vue'
 import type { PointCloudData, PathData } from '../../components/RvizViewer/types'
 import { parsePCDFile, downsamplePointCloud } from '../../components/RvizViewer/utils/pcdParser'
 import { checkCoordinateOrder } from '../../components/RvizViewer/utils/pcdDebug'
@@ -147,6 +159,8 @@ const pathData = ref<PathData[]>([])
 // 加载状态
 const loading = ref(false)
 const autoDownsample = ref(true) // 默认启用自动下采样
+const useHighPerformanceEngine = ref(false) // 是否使用高性能引擎
+const currentFile = ref<File | undefined>(undefined)
 
 // 渲染统计
 const { stats: renderStats, recordRender, recordPointCloudUpdate, printStats, resetStats } = useRenderStats()
@@ -196,11 +210,20 @@ async function handleFileChange(file: any): Promise<void> {
     return
   }
 
+  // 保存文件引用（用于高性能引擎）
+  currentFile.value = selectedFile
+
+  // 如果使用高性能引擎，直接返回（由 PointCloudViewer 处理）
+  if (useHighPerformanceEngine.value) {
+    ElMessage.success('使用高性能引擎加载点云，支持千万级点云流畅可视化')
+    return
+  }
+
   loading.value = true
   const startTime = performance.now()
   
   try {
-    // 解析PCD文件
+    // 解析PCD文件（传统方式）
     let data = await parsePCDFile(selectedFile)
     
     // 验证数据有效性

@@ -291,7 +291,7 @@ export class WorldviewContext {
 
   onDirty(): void {
     // 标记需要渲染
-    this._needsPaint = true
+      this._needsPaint = true
     
     // 如果没有正在进行的渲染，调度下一帧
     if (this._frame === null && this.scheduledPaint === null) {
