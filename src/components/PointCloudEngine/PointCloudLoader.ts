@@ -97,45 +97,25 @@ export class PointCloudLoader {
       clearInterval(progressInterval)
       onProgress?.(50, '解析完成，生成 LOD 层级...')
 
-      // 生成不同 LOD 层级
+      // 快速加载：只使用最高 LOD，直接分块（类似 pcl_viewer 的快速加载）
+      onProgress?.(50, '准备分块数据...')
+      
       const chunks: PointCloudChunk[] = []
       
-      for (let lodIndex = 0; lodIndex < lodLevels.length; lodIndex++) {
-        const lodRatio = lodLevels[lodIndex]
-        const lodProgress = 50 + (lodIndex / lodLevels.length) * 40
+      // 只使用原始数据，不生成多个 LOD 层级（加快加载速度）
+      const lodChunks = this.splitIntoChunks(parsed, chunkSize, 0)
+      chunks.push(...lodChunks)
 
-        onProgress?.(lodProgress, `生成 LOD ${lodIndex + 1}/${lodLevels.length}...`)
-
-        let lodData: ParsedPointCloud
-
-        if (lodIndex === 0) {
-          // 最高 LOD：使用原始数据
-          lodData = parsed
-        } else {
-          // 其他 LOD：体素下采样
-          const voxelSize = this.calculateVoxelSize(parsed.bounds, lodRatio)
-          lodData = await worker.voxelDownsample(
-            parsed.points,
-            parsed.colors,
-            voxelSize
-          )
-        }
-
-        // 分块处理
-        const lodChunks = this.splitIntoChunks(lodData, chunkSize, lodIndex)
-        chunks.push(...lodChunks)
-
-        // 缓存 LOD 数据
-        if (enableCache) {
-          await indexedDBCache.savePointCloud(`${cacheKey}_lod${lodIndex}`, {
-            points: lodData.points,
-            colors: lodData.colors,
-            count: lodData.count,
-            bounds: lodData.bounds,
-            fileSize: file.size,
-            lod: lodIndex
-          })
-        }
+      // 缓存数据（只缓存最高 LOD）
+      if (enableCache) {
+        await indexedDBCache.savePointCloud(`${cacheKey}_lod0`, {
+          points: parsed.points,
+          colors: parsed.colors,
+          count: parsed.count,
+          bounds: parsed.bounds,
+          fileSize: file.size,
+          lod: 0
+        })
       }
 
       onProgress?.(100, '加载完成')

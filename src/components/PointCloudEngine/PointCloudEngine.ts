@@ -27,10 +27,12 @@ export interface RenderOptions {
   maxPointCount?: number // 单帧最大渲染点数（默认 200 万）
   pointBudget?: number // 点预算，用于动态 LOD 调整（默认 100 万）
   pointSize?: number
+  pointColor?: string | null // 统一颜色覆盖（null 表示使用原始颜色）
   enableLOD?: boolean
   enableFrustumCulling?: boolean
   enableVoxelDownsample?: boolean
   voxelSize?: number
+  highPerformanceMode?: boolean // 高性能模式
 }
 
 export class PointCloudEngine {
@@ -59,11 +61,13 @@ export class PointCloudEngine {
     this.options = {
       maxPointCount: options.maxPointCount || 2000000,
       pointBudget: options.pointBudget || 1000000,
-      pointSize: options.pointSize || 1.5,
+      pointSize: options.pointSize ?? 0.01, // 默认点大小 0.01
+      pointColor: options.pointColor ?? null,
       enableLOD: options.enableLOD !== false,
       enableFrustumCulling: options.enableFrustumCulling !== false,
       enableVoxelDownsample: options.enableVoxelDownsample !== false,
-      voxelSize: options.voxelSize || 0.1
+      voxelSize: options.voxelSize || 0.1,
+      highPerformanceMode: options.highPerformanceMode !== false
     }
 
     // 初始化 Three.js 场景
@@ -78,12 +82,16 @@ export class PointCloudEngine {
 
     // 初始化渲染器（优先使用 WebGL2，支持更多特性）
     this.renderer = new THREE.WebGLRenderer({
-      antialias: true,
+      antialias: !this.options.highPerformanceMode, // 高性能模式关闭抗锯齿
       powerPreference: 'high-performance',
       logarithmicDepthBuffer: true // 支持大场景
     })
     this.renderer.setSize(width, height)
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)) // 限制像素比，提升性能
+    // 高性能模式：限制像素比以提升性能
+    const pixelRatio = this.options.highPerformanceMode 
+      ? Math.min(window.devicePixelRatio, 1.5) 
+      : Math.min(window.devicePixelRatio, 2)
+    this.renderer.setPixelRatio(pixelRatio)
     container.appendChild(this.renderer.domElement)
 
     // 初始化视锥体剔除
@@ -131,7 +139,8 @@ export class PointCloudEngine {
     // 创建材质
     const material = new THREE.PointsMaterial({
       size: this.options.pointSize,
-      vertexColors: true,
+      vertexColors: !this.options.pointColor, // 如果设置了统一颜色，则禁用顶点颜色
+      color: this.options.pointColor ? new THREE.Color(this.options.pointColor) : undefined,
       sizeAttenuation: true,
       transparent: false
     })
@@ -369,6 +378,27 @@ export class PointCloudEngine {
           chunk.material.size = options.pointSize
         }
       }
+    }
+
+    // 更新点颜色
+    if (options.pointColor !== undefined) {
+      for (const chunk of this.chunks.values()) {
+        if (chunk.material) {
+          chunk.material.vertexColors = !options.pointColor
+          if (options.pointColor) {
+            chunk.material.color = new THREE.Color(options.pointColor)
+          }
+        }
+      }
+    }
+
+    // 更新高性能模式
+    if (options.highPerformanceMode !== undefined) {
+      this.renderer.setPixelRatio(
+        options.highPerformanceMode 
+          ? Math.min(window.devicePixelRatio, 1.5) 
+          : Math.min(window.devicePixelRatio, 2)
+      )
     }
   }
 

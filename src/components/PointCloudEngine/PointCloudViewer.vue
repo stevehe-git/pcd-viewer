@@ -30,28 +30,56 @@
         <span>点大小:</span>
         <el-slider
           v-model="pointSize"
-          :min="0.5"
+          :min="0.01"
           :max="5"
-          :step="0.1"
+          :step="0.01"
           style="width: 120px; margin: 0 8px;"
           @change="updatePointSize"
         />
         <span>{{ pointSize.toFixed(1) }}</span>
       </div>
-    </div>
-
-    <!-- 性能统计 -->
-    <div v-if="showStats" class="stats-panel">
-      <div class="stats-header">
-        <span>性能统计</span>
-        <el-button size="small" text @click="showStats = false">
-          <el-icon><Close /></el-icon>
+      
+      <div class="point-color-control">
+        <span>点颜色:</span>
+        <el-color-picker
+          v-model="pointColor"
+          :show-alpha="false"
+          @change="updatePointColor"
+        />
+        <el-button
+          size="small"
+          text
+          style="margin-left: 8px; color: white;"
+          @click="resetPointColor"
+        >
+          重置
         </el-button>
       </div>
-      <div class="stats-content">
+      
+      <div class="performance-mode-control">
+        <el-switch
+          v-model="highPerformanceMode"
+          active-text="高性能模式"
+          inactive-text="标准模式"
+          @change="updatePerformanceMode"
+        />
+      </div>
+    </div>
+
+    <!-- 性能统计 - 实时信息显示 -->
+    <div class="stats-panel">
+      <div class="stats-header">
+        <span>实时信息</span>
+        <el-button size="small" text @click="showStats = !showStats">
+          <el-icon><Close v-if="showStats" /><DataAnalysis v-else /></el-icon>
+        </el-button>
+      </div>
+      <div v-show="showStats" class="stats-content">
         <div class="stats-item">
           <span>FPS:</span>
-          <span>{{ stats.fps }}</span>
+          <span :class="{ 'fps-good': stats.fps >= 30, 'fps-warning': stats.fps < 30 && stats.fps >= 15, 'fps-bad': stats.fps < 15 }">
+            {{ stats.fps }}
+          </span>
         </div>
         <div class="stats-item">
           <span>渲染点数:</span>
@@ -69,29 +97,21 @@
           <span>帧时间:</span>
           <span>{{ stats.frameTime.toFixed(2) }}ms</span>
         </div>
+        <div class="stats-item">
+          <span>模式:</span>
+          <span>{{ highPerformanceMode ? '高性能' : '标准' }}</span>
+        </div>
       </div>
     </div>
-
-    <!-- 显示统计按钮 -->
-    <el-button
-      v-if="!showStats"
-      class="toggle-stats-btn"
-      size="small"
-      @click="showStats = true"
-    >
-      <el-icon><DataAnalysis /></el-icon>
-      显示统计
-    </el-button>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { Refresh, FullScreen, Close, DataAnalysis } from '@element-plus/icons-vue'
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls'
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { PointCloudEngine } from './PointCloudEngine'
 import { PointCloudLoader } from './PointCloudLoader'
-import type { PointCloudChunk } from './PointCloudEngine'
 
 interface Props {
   pointCloudFile?: File
@@ -103,12 +123,20 @@ const props = withDefaults(defineProps<Props>(), {
   autoLoad: false
 })
 
+// 定义事件
+const emit = defineEmits<{
+  render: [stats: { renderTime: number; pointCount: number }]
+  'point-cloud-update': [stats: { pointCount: number; updateTime?: number }]
+}>()
+
 const containerRef = ref<HTMLElement | null>(null)
 const loading = ref(false)
 const loadProgress = ref(0)
 const loadMessage = ref('')
-const showStats = ref(false)
-const pointSize = ref(1.5)
+const showStats = ref(true) // 默认显示统计信息
+const pointSize = ref(0.01) // 默认点大小 0.01
+const pointColor = ref<string | null>(null) // null 表示使用原始颜色
+const highPerformanceMode = ref(true) // 默认启用高性能模式
 
 let engine: PointCloudEngine | null = null
 let loader: PointCloudLoader | null = null
@@ -133,8 +161,10 @@ onMounted(async () => {
     maxPointCount: 2000000, // 最多渲染 200 万点
     pointBudget: 1000000, // 点预算 100 万
     pointSize: pointSize.value,
+    pointColor: pointColor.value,
     enableLOD: true,
-    enableFrustumCulling: true
+    enableFrustumCulling: true,
+    highPerformanceMode: highPerformanceMode.value
   })
 
   // 初始化相机控制器
@@ -182,11 +212,11 @@ async function loadPointCloud(file: File): Promise<void> {
       // 这里需要添加清除方法
     }
 
-    // 加载点云
+    // 加载点云（快速模式：只生成一个 LOD 层级，直接加载原始数据）
     const chunks = await loader.loadPointCloud(file, {
       maxPoints: 10000000, // 最多 1000 万点
-      chunkSize: 100000, // 每块 10 万点
-      lodLevels: [1, 0.5, 0.1], // 3 个 LOD 层级
+      chunkSize: 500000, // 每块 50 万点（增大分块以减少分块数量，加快加载）
+      lodLevels: [1], // 只使用最高 LOD，不生成多个层级（加快加载速度，类似 pcl_viewer）
       enableCache: true,
       onProgress: (progress, message) => {
         loadProgress.value = progress
@@ -195,12 +225,20 @@ async function loadPointCloud(file: File): Promise<void> {
     })
 
     // 添加到渲染引擎
+    let totalPointCount = 0
     for (const chunk of chunks) {
       engine.addChunk(chunk)
+      totalPointCount += chunk.count
     }
 
     // 适应屏幕
     engine.fitToScreen()
+
+    // 触发点云更新事件，用于更新父组件的统计面板
+    emit('point-cloud-update', {
+      pointCount: totalPointCount,
+      updateTime: performance.now()
+    })
 
     loadMessage.value = '加载完成'
     setTimeout(() => {
@@ -221,12 +259,22 @@ function startRenderLoop(): void {
     // 更新控制器
     controls.update()
 
-    // 渲染
+    // 渲染并记录时间
+    const renderStartTime = performance.now()
     engine.render()
+    const renderTime = performance.now() - renderStartTime
 
     // 更新统计
     const engineStats = engine.getStats()
     stats.value = engineStats
+
+    // 触发渲染事件，用于更新父组件的统计面板
+    // 传递实际渲染的点数（用于计算每帧大小）
+    // 注意：总点数在点云加载时通过 point-cloud-update 事件设置
+    emit('render', {
+      renderTime,
+      pointCount: engineStats.renderedPoints || 0 // 使用实际渲染的点数，如果为0则传递0
+    })
 
     animationFrameId = requestAnimationFrame(render)
   }
@@ -258,6 +306,24 @@ function fitToScreen(): void {
 function updatePointSize(): void {
   if (!engine) return
   engine.updateOptions({ pointSize: pointSize.value })
+}
+
+// 更新点颜色
+function updatePointColor(): void {
+  if (!engine) return
+  engine.updateOptions({ pointColor: pointColor.value })
+}
+
+// 重置点颜色（使用原始颜色）
+function resetPointColor(): void {
+  pointColor.value = null
+  updatePointColor()
+}
+
+// 更新高性能模式
+function updatePerformanceMode(): void {
+  if (!engine) return
+  engine.updateOptions({ highPerformanceMode: highPerformanceMode.value })
 }
 
 // 清理
@@ -331,11 +397,21 @@ onUnmounted(() => {
   backdrop-filter: blur(8px);
 }
 
-.point-size-control {
+.point-size-control,
+.point-color-control,
+.performance-mode-control {
   display: flex;
   align-items: center;
   color: white;
   font-size: 12px;
+}
+
+.point-color-control {
+  gap: 8px;
+}
+
+.performance-mode-control {
+  margin-top: 4px;
 }
 
 .stats-panel {
@@ -372,14 +448,18 @@ onUnmounted(() => {
   padding: 2px 0;
 }
 
-.toggle-stats-btn {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  z-index: 100;
-  background: rgba(0, 0, 0, 0.6);
-  color: white;
-  border: none;
-  backdrop-filter: blur(8px);
+.stats-item .fps-good {
+  color: #67c23a;
+  font-weight: 600;
+}
+
+.stats-item .fps-warning {
+  color: #e6a23c;
+  font-weight: 600;
+}
+
+.stats-item .fps-bad {
+  color: #f56c6c;
+  font-weight: 600;
 }
 </style>

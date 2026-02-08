@@ -15,11 +15,11 @@ export interface RenderStats {
   minRenderTime: number
   // 最大渲染时间（ms）
   maxRenderTime: number
-  // 点云点数
+  // 点云总点数（加载的所有点数）
   pointCount: number
-  // 每帧数据大小（MB）
+  // 每帧数据大小（MB，基于实际渲染的点数）
   frameSize: number
-  // 总数据大小（MB）
+  // 总数据大小（MB，基于所有加载的点数）
   totalDataSize: number
   // 点云更新次数
   pointCloudUpdates: number
@@ -58,10 +58,13 @@ export function useRenderStats() {
   let lastPrintTime = performance.now()
   const PRINT_INTERVAL = 2000 // 每2秒打印一次
 
+  // 保存总点数（从点云加载时设置，不会被渲染覆盖）
+  let totalPointCount = 0
+
   /**
    * 记录一次渲染
    */
-  function recordRender(renderTime: number, pointCount: number = 0): void {
+  function recordRender(renderTime: number, renderedPointCount: number = 0): void {
     const now = performance.now()
     
     // 更新总渲染次数
@@ -81,15 +84,12 @@ export function useRenderStats() {
       stats.value.maxRenderTime = Math.max(...renderTimeHistory)
     }
     
-    // 更新点数
-    if (pointCount > 0) {
-      stats.value.pointCount = pointCount
-    }
-    
-    // 计算每帧数据大小（假设每个点 12 字节：x, y, z 各 4 字节）
-    // 如果有颜色，每个点额外 16 字节（r, g, b, a 各 4 字节）
-    const bytesPerPoint = 12 // 基础位置数据
-    const frameSizeBytes = pointCount * bytesPerPoint
+    // 注意：pointCount 字段保持为总点数，不会被渲染点数覆盖
+    // 使用实际渲染的点数来计算每帧大小
+    const bytesPerPoint = 12 // 基础位置数据（x, y, z 各 4 字节）
+    const colorBytesPerPoint = 3 // 颜色数据（r, g, b 各 1 字节，Uint8Array）
+    const totalBytesPerPoint = bytesPerPoint + colorBytesPerPoint // 总共 15 字节/点
+    const frameSizeBytes = renderedPointCount * totalBytesPerPoint
     stats.value.frameSize = frameSizeBytes / (1024 * 1024) // 转换为 MB
     
     // 计算 FPS
@@ -128,12 +128,16 @@ export function useRenderStats() {
    */
   function recordPointCloudUpdate(pointCount: number, updateTime?: number): void {
     stats.value.pointCloudUpdates++
+    // 更新总点数（点云加载时的总点数）
+    totalPointCount = pointCount
     stats.value.pointCount = pointCount
     stats.value.lastUpdateTime = updateTime || performance.now()
     
-    // 计算总数据大小
-    const bytesPerPoint = 12 // 基础位置数据
-    const totalBytes = pointCount * bytesPerPoint
+    // 计算总数据大小（包含位置和颜色数据）
+    const bytesPerPoint = 12 // 基础位置数据（x, y, z 各 4 字节）
+    const colorBytesPerPoint = 3 // 颜色数据（r, g, b 各 1 字节）
+    const totalBytesPerPoint = bytesPerPoint + colorBytesPerPoint // 总共 15 字节/点
+    const totalBytes = pointCount * totalBytesPerPoint
     stats.value.totalDataSize = totalBytes / (1024 * 1024) // 转换为 MB
   }
 
