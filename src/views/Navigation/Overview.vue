@@ -39,7 +39,86 @@
           :point-cloud="pointCloudData"
           :paths="pathData"
           :options="viewerOptions"
+          @render="handleRender"
+          @point-cloud-update="handlePointCloudUpdate"
         />
+        <!-- 渲染信息面板 -->
+        <div v-if="showRenderStats" class="render-stats-panel">
+          <div class="stats-header">
+            <span>渲染统计</span>
+            <el-button size="small" text @click="showRenderStats = false">
+              <el-icon><Close /></el-icon>
+            </el-button>
+          </div>
+          <div class="stats-content">
+            <div class="stats-item">
+              <span class="stats-label">总渲染次数:</span>
+              <span class="stats-value">{{ renderStats.totalRenderCalls.toLocaleString() }}</span>
+            </div>
+            <div class="stats-item">
+              <span class="stats-label">当前 FPS:</span>
+              <span class="stats-value">{{ renderStats.fps }}</span>
+            </div>
+            <div class="stats-item">
+              <span class="stats-label">平均 FPS:</span>
+              <span class="stats-value">{{ renderStats.avgFps }}</span>
+            </div>
+            <div class="stats-item">
+              <span class="stats-label">渲染时间:</span>
+              <span class="stats-value">{{ renderStats.renderTime.toFixed(2) }}ms</span>
+            </div>
+            <div class="stats-item">
+              <span class="stats-label">平均渲染时间:</span>
+              <span class="stats-value">{{ renderStats.avgRenderTime.toFixed(2) }}ms</span>
+            </div>
+            <div class="stats-item">
+              <span class="stats-label">最小/最大:</span>
+              <span class="stats-value">
+                {{ renderStats.minRenderTime === Infinity ? 'N/A' : renderStats.minRenderTime.toFixed(2) }}ms / 
+                {{ renderStats.maxRenderTime.toFixed(2) }}ms
+              </span>
+            </div>
+            <div class="stats-item">
+              <span class="stats-label">点云点数:</span>
+              <span class="stats-value">{{ renderStats.pointCount.toLocaleString() }}</span>
+            </div>
+            <div class="stats-item">
+              <span class="stats-label">每帧大小:</span>
+              <span class="stats-value">{{ renderStats.frameSize.toFixed(2) }}MB</span>
+            </div>
+            <div class="stats-item">
+              <span class="stats-label">总数据大小:</span>
+              <span class="stats-value">{{ renderStats.totalDataSize.toFixed(2) }}MB</span>
+            </div>
+            <div class="stats-item">
+              <span class="stats-label">点云更新次数:</span>
+              <span class="stats-value">{{ renderStats.pointCloudUpdates }}</span>
+            </div>
+            <div class="stats-item">
+              <span class="stats-label">打印频率:</span>
+              <span class="stats-value">
+                {{ renderStats.pointCloudUpdates > 0 
+                  ? (renderStats.totalRenderCalls / renderStats.pointCloudUpdates).toFixed(2) + ' 帧/次'
+                  : 'N/A'
+                }}
+              </span>
+            </div>
+            <div class="stats-actions">
+              <el-button size="small" @click="resetRenderStats">重置统计</el-button>
+              <el-button size="small" @click="printRenderStats">打印到控制台</el-button>
+            </div>
+          </div>
+        </div>
+        <!-- 显示/隐藏统计面板按钮 -->
+        <el-button 
+          v-if="!showRenderStats" 
+          class="toggle-stats-btn"
+          size="small"
+          @click="showRenderStats = true"
+        >
+          <el-icon><DataAnalysis /></el-icon>
+          显示渲染统计
+        </el-button>
       </div>
     </div>
   </div>
@@ -47,12 +126,13 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
-import { Upload, Delete } from '@element-plus/icons-vue'
+import { Upload, Delete, Close, DataAnalysis } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import RvizViewer from '../../components/RvizViewer/RvizViewer.vue'
 import type { PointCloudData, PathData } from '../../components/RvizViewer/types'
 import { parsePCDFile, downsamplePointCloud } from '../../components/RvizViewer/utils/pcdParser'
 import { checkCoordinateOrder } from '../../components/RvizViewer/utils/pcdDebug'
+import { useRenderStats } from '../../composables/useRenderStats'
 
 // 视口尺寸
 const viewerWidth = ref(1200)
@@ -67,6 +147,32 @@ const pathData = ref<PathData[]>([])
 // 加载状态
 const loading = ref(false)
 const autoDownsample = ref(true) // 默认启用自动下采样
+
+// 渲染统计
+const { stats: renderStats, recordRender, recordPointCloudUpdate, printStats, resetStats } = useRenderStats()
+const showRenderStats = ref(false)
+
+// 处理渲染事件
+function handleRender(stats: { renderTime: number; pointCount: number }): void {
+  recordRender(stats.renderTime, stats.pointCount)
+}
+
+// 处理点云更新事件
+function handlePointCloudUpdate(stats: { pointCount: number; updateTime?: number }): void {
+  recordPointCloudUpdate(stats.pointCount, stats.updateTime)
+}
+
+// 重置渲染统计
+function resetRenderStats(): void {
+  resetStats()
+  ElMessage.success('渲染统计已重置')
+}
+
+// 打印渲染统计
+function printRenderStats(): void {
+  printStats()
+  ElMessage.success('渲染统计已打印到控制台')
+}
 
 // 查看器选项（rviz 风格：深灰色背景，浅灰色网格）
 const viewerOptions = {
@@ -102,7 +208,6 @@ async function handleFileChange(file: any): Promise<void> {
       throw new Error('解析后的点云数据为空')
     }
     
-    const parseTime = performance.now() - startTime
     const originalPoints = data.points.length
     
     // 如果启用自动下采样且点数超过阈值，进行下采样
@@ -173,12 +278,18 @@ function debugPointCloud(): void {
   }
   
   // 计算边界（使用循环避免栈溢出）
-  let minX = points[0].x
-  let minY = points[0].y
-  let minZ = points[0].z
-  let maxX = points[0].x
-  let maxY = points[0].y
-  let maxZ = points[0].z
+  const firstPoint = points[0]
+  if (!firstPoint) {
+    ElMessage.warning('点云数据格式错误')
+    return
+  }
+  
+  let minX = firstPoint.x
+  let minY = firstPoint.y
+  let minZ = firstPoint.z
+  let maxX = firstPoint.x
+  let maxY = firstPoint.y
+  let maxZ = firstPoint.z
   
   // 对于大点云，只计算前10000个点的边界作为示例
   const sampleSize = Math.min(points.length, 10000)
@@ -290,5 +401,80 @@ h1 {
   width: 100%;
   min-height: 500px;
   position: relative;
+}
+
+.render-stats-panel {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.85);
+  color: #fff;
+  padding: 12px;
+  border-radius: 6px;
+  min-width: 280px;
+  max-width: 320px;
+  font-size: 12px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.stats-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.stats-content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stats-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+}
+
+.stats-label {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 12px;
+}
+
+.stats-value {
+  color: #fff;
+  font-weight: 500;
+  font-size: 12px;
+  font-family: 'Courier New', monospace;
+}
+
+.stats-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.toggle-stats-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  border: none;
+  backdrop-filter: blur(8px);
+}
+
+.toggle-stats-btn:hover {
+  background: rgba(0, 0, 0, 0.8);
 }
 </style>

@@ -58,6 +58,12 @@ const props = withDefaults(defineProps<Props>(), {
   paths: () => []
 })
 
+// 定义事件
+const emit = defineEmits<{
+  render: [stats: { renderTime: number; pointCount: number }]
+  pointCloudUpdate: [stats: { pointCount: number; updateTime?: number }]
+}>()
+
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 const worldview = ref<Worldview | null>(null)
 const sceneManager = ref<SceneManager | null>(null)
@@ -102,6 +108,9 @@ onMounted(async () => {
   const reglContext = worldview.value.getContext().initializedData?.regl
   if (reglContext) {
     sceneManager.value = new SceneManager(reglContext, worldview.value.getContext(), props.options)
+    
+    // 监听渲染统计
+    setupRenderStatsListener()
   }
 
   // 初始化相机控制器（使用 WorldviewContext 的 CameraStore）
@@ -235,12 +244,57 @@ function toggleAxes(): void {
   worldview.value?.paint()
 }
 
+// 设置渲染统计监听
+let renderStartTime = 0
+function setupRenderStatsListener(): void {
+  if (!worldview.value) return
+  
+  const context = worldview.value.getContext()
+  
+  // 在 paint 开始前记录时间
+  const originalPaint = context.paint.bind(context)
+  context.paint = function() {
+    renderStartTime = performance.now()
+    originalPaint()
+    // 使用 requestAnimationFrame 确保在渲染完成后获取统计信息
+    requestAnimationFrame(() => {
+      const renderTime = context.counters.render || (performance.now() - renderStartTime)
+      
+      // 获取点云点数
+      let pointCount = 0
+      if (props.pointCloud?.points) {
+        pointCount = props.pointCloud.points.length
+      }
+      
+      // 触发渲染事件
+      emit('render', {
+        renderTime: renderTime,
+        pointCount: pointCount
+      })
+    })
+  }
+}
+
 // 监听属性变化
 watch(
   () => props.pointCloud,
-  (newData) => {
+  (newData, oldData) => {
     if (newData && sceneManager.value) {
+      const updateStartTime = performance.now()
       sceneManager.value.updatePointCloud(newData)
+      const updateTime = performance.now() - updateStartTime
+      
+      // 触发点云更新事件
+      emit('pointCloudUpdate', {
+        pointCount: newData.points?.length || 0,
+        updateTime: updateTime
+      })
+      
+      worldview.value?.markDirty()
+      worldview.value?.paint()
+    } else if (!newData && oldData) {
+      // 清除点云
+      sceneManager.value?.updatePointCloud({ points: [] } as any)
       worldview.value?.markDirty()
       worldview.value?.paint()
     }
